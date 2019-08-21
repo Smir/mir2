@@ -24,6 +24,12 @@ namespace Client.MirControls
                 if (GridType == MirGridType.TrustMerchant)
                     return TrustMerchantDialog.Selected != null ? TrustMerchantDialog.Selected.Listing.Item : null;
 
+                if (GridType == MirGridType.Renting)
+                    return ItemRentingDialog.RentalItem;
+
+                if (GridType == MirGridType.GuestRenting)
+                    return GuestItemRentingDialog.GuestLoanItem;
+
                 if (ItemArray != null && _itemSlot >= 0 && _itemSlot < ItemArray.Length)
                     return ItemArray[_itemSlot];
                 return null;
@@ -32,11 +38,26 @@ namespace Client.MirControls
             {
                 if (GridType == MirGridType.DropPanel)
                     NPCDropDialog.TargetItem = value;
+                else if (GridType == MirGridType.Renting)
+                    ItemRentingDialog.RentalItem = value;
+                else if (GridType == MirGridType.GuestRenting)
+                    GuestItemRentingDialog.GuestLoanItem = value;
                 else if (ItemArray != null && _itemSlot >= 0 && _itemSlot < ItemArray.Length)
                     ItemArray[_itemSlot] = value;
 
                 SetEffect();
                 Redraw();
+            }
+        }
+
+        public UserItem ShadowItem
+        {
+            get
+            {
+                if (GridType == MirGridType.Craft && _itemSlot >= 0 && _itemSlot < ItemArray.Length)
+                    return CraftDialog.ShadowItems[_itemSlot];
+
+                return null;
             }
         }
 
@@ -74,6 +95,9 @@ namespace Client.MirControls
                         return MailComposeParcelDialog.Items;
                     case MirGridType.Refine:
                         return GameScene.Refine;
+                    case MirGridType.Craft:
+                        return CraftDialog.IngredientSlots;
+
                     default:
                         throw new NotImplementedException();
                 }
@@ -83,7 +107,7 @@ namespace Client.MirControls
 
         public override bool Border
         {
-            get { return (GameScene.SelectedCell == this || MouseControl == this || Locked) && GridType != MirGridType.DropPanel; }
+            get { return (GameScene.SelectedCell == this || MouseControl == this || Locked) && GridType != MirGridType.DropPanel && (GridType != MirGridType.Craft); }
         }
 
         private bool _locked;
@@ -228,7 +252,7 @@ namespace Client.MirControls
         {
             if (Locked) return;
 
-            if (GameScene.PickedUpGold || GridType == MirGridType.Inspect || GridType == MirGridType.TrustMerchant) return;
+            if (GameScene.PickedUpGold || GridType == MirGridType.Inspect || GridType == MirGridType.TrustMerchant || GridType == MirGridType.Craft) return;
 
             base.OnMouseClick(e);
 
@@ -270,7 +294,7 @@ namespace Client.MirControls
         
         public void UseItem()
         {
-            if (Locked || GridType == MirGridType.Inspect || GridType == MirGridType.TrustMerchant || GridType == MirGridType.GuildStorage) return;
+            if (Locked || GridType == MirGridType.Inspect || GridType == MirGridType.TrustMerchant || GridType == MirGridType.GuildStorage || GridType == MirGridType.Craft) return;
 
             if (MapObject.User.Fishing) return;
             if (MapObject.User.RidingMount && Item.Info.Type != ItemType.Scroll && Item.Info.Type != ItemType.Potion && Item.Info.Type != ItemType.Torch) return;
@@ -647,7 +671,7 @@ namespace Client.MirControls
 
         private void MoveItem()
         {
-            if (GridType == MirGridType.BuyBack || GridType == MirGridType.DropPanel || GridType == MirGridType.Inspect || GridType == MirGridType.TrustMerchant) return;
+            if (GridType == MirGridType.BuyBack || GridType == MirGridType.DropPanel || GridType == MirGridType.Inspect || GridType == MirGridType.TrustMerchant || GridType == MirGridType.Craft) return;
 
             if (GameScene.SelectedCell != null)
             {
@@ -958,7 +982,35 @@ namespace Client.MirControls
                                 break;
                             #endregion
 
+                            #region From Item Renting Dialog
 
+                            case MirGridType.Renting:
+                                if (GameScene.User.RentalItemLocked)
+                                {
+                                    GameScene.Scene.ChatDialog.ReceiveChat("Unable to remove locked item, cancel item rental and try again.", ChatType.System);
+                                    GameScene.SelectedCell = null;
+                                    return;
+                                }
+
+                                if (GameScene.SelectedCell.Item.Weight + MapObject.User.CurrentBagWeight > MapObject.User.MaxBagWeight)
+                                {
+                                    GameScene.Scene.ChatDialog.ReceiveChat("Too heavy to get back.", ChatType.System);
+                                    GameScene.SelectedCell = null;
+                                    return;
+                                }
+
+                                if (Item == null)
+                                {
+                                    Network.Enqueue(new C.RetrieveRentalItem { From = GameScene.SelectedCell.ItemSlot, To = ItemSlot });
+
+                                    Locked = true;
+                                    GameScene.SelectedCell.Locked = true;
+                                    GameScene.SelectedCell = null;
+                                    return;
+                                }
+
+                                break;
+                                #endregion
                         }
                         break;
                     #endregion
@@ -1287,7 +1339,28 @@ namespace Client.MirControls
 
                     #endregion
 
+                    #region To Item Renting Dialog
 
+                    case MirGridType.Renting:
+                        switch (GameScene.SelectedCell.GridType)
+                        {
+                            case MirGridType.Inventory:
+             
+                                if (Item == null)
+                                {
+                                    Network.Enqueue(new C.DepositRentalItem { From = GameScene.SelectedCell.ItemSlot, To = ItemSlot });
+                                    Locked = true;
+                                    GameScene.SelectedCell.Locked = true;
+                                    GameScene.SelectedCell = null;
+                                    return;
+                                }
+
+                                break;
+                        }
+
+                        break;
+
+                    #endregion
 
                     #region To Awakening
                     case MirGridType.AwakenItem:
@@ -1562,14 +1635,14 @@ namespace Client.MirControls
                 case MirGender.Male:
                     if (!Item.Info.RequiredGender.HasFlag(RequiredGender.Male))
                     {
-                        GameScene.Scene.ChatDialog.ReceiveChat("You are not Female.", ChatType.System);
+                        GameScene.Scene.ChatDialog.ReceiveChat(GameLanguage.NotFemale, ChatType.System);
                         return false;
                     }
                     break;
                 case MirGender.Female:
                     if (!Item.Info.RequiredGender.HasFlag(RequiredGender.Female))
                     {
-                        GameScene.Scene.ChatDialog.ReceiveChat("You are not Male.", ChatType.System);
+                        GameScene.Scene.ChatDialog.ReceiveChat(GameLanguage.NotMale, ChatType.System);
                         return false;
                     }
                     break;
@@ -1619,42 +1692,84 @@ namespace Client.MirControls
                 case RequiredType.Level:
                     if (MapObject.User.Level < Item.Info.RequiredAmount)
                     {
-                        GameScene.Scene.ChatDialog.ReceiveChat("You are not a high enough level.", ChatType.System);
+                        GameScene.Scene.ChatDialog.ReceiveChat(GameLanguage.LowLevel, ChatType.System);
                         return false;
                     }
                     break;
-                case RequiredType.AC:
+                case RequiredType.MaxAC:
                     if (MapObject.User.MaxAC < Item.Info.RequiredAmount)
                     {
                         GameScene.Scene.ChatDialog.ReceiveChat("You do not have enough AC.", ChatType.System);
                         return false;
                     }
                     break;
-                case RequiredType.MAC:
+                case RequiredType.MaxMAC:
                     if (MapObject.User.MaxMAC < Item.Info.RequiredAmount)
                     {
                         GameScene.Scene.ChatDialog.ReceiveChat("You do not have enough MAC.", ChatType.System);
                         return false;
                     }
                     break;
-                case RequiredType.DC:
+                case RequiredType.MaxDC:
                     if (MapObject.User.MaxDC < Item.Info.RequiredAmount)
                     {
-                        GameScene.Scene.ChatDialog.ReceiveChat("You do not have enough DC.", ChatType.System);
+                        GameScene.Scene.ChatDialog.ReceiveChat(GameLanguage.LowDC, ChatType.System);
                         return false;
                     }
                     break;
-                case RequiredType.MC:
+                case RequiredType.MaxMC:
                     if (MapObject.User.MaxMC < Item.Info.RequiredAmount)
                     {
-                        GameScene.Scene.ChatDialog.ReceiveChat("You do not have enough MC.", ChatType.System);
+                        GameScene.Scene.ChatDialog.ReceiveChat(GameLanguage.LowMC, ChatType.System);
                         return false;
                     }
                     break;
-                case RequiredType.SC:
+                case RequiredType.MaxSC:
                     if (MapObject.User.MaxSC < Item.Info.RequiredAmount)
                     {
-                        GameScene.Scene.ChatDialog.ReceiveChat("You do not have enough SC.", ChatType.System);
+                        GameScene.Scene.ChatDialog.ReceiveChat(GameLanguage.LowSC, ChatType.System);
+                        return false;
+                    }
+                    break;
+                case RequiredType.MaxLevel:
+                    if (MapObject.User.Level > Item.Info.RequiredAmount)
+                    {
+                        GameScene.Scene.ChatDialog.ReceiveChat("You have exceeded the maximum level.", ChatType.System);
+                        return false;
+                    }
+                    break;
+                case RequiredType.MinAC:
+                    if (MapObject.User.MinAC < Item.Info.RequiredAmount)
+                    {
+                        GameScene.Scene.ChatDialog.ReceiveChat("You do not have enough Base AC.", ChatType.System);
+                        return false;
+                    }
+                    break;
+                case RequiredType.MinMAC:
+                    if (MapObject.User.MinMAC < Item.Info.RequiredAmount)
+                    {
+                        GameScene.Scene.ChatDialog.ReceiveChat("You do not have enough Base MAC.", ChatType.System);
+                        return false;
+                    }
+                    break;
+                case RequiredType.MinDC:
+                    if (MapObject.User.MinDC < Item.Info.RequiredAmount)
+                    {
+                        GameScene.Scene.ChatDialog.ReceiveChat("You do not have enough Base DC.", ChatType.System);
+                        return false;
+                    }
+                    break;
+                case RequiredType.MinMC:
+                    if (MapObject.User.MinMC < Item.Info.RequiredAmount)
+                    {
+                        GameScene.Scene.ChatDialog.ReceiveChat("You do not have enough Base MC.", ChatType.System);
+                        return false;
+                    }
+                    break;
+                case RequiredType.MinSC:
+                    if (MapObject.User.MinSC < Item.Info.RequiredAmount)
+                    {
+                        GameScene.Scene.ChatDialog.ReceiveChat("You do not have enough Base SC.", ChatType.System);
                         return false;
                     }
                     break;
@@ -1700,14 +1815,14 @@ namespace Client.MirControls
                 case MirGender.Male:
                     if (!i.Info.RequiredGender.HasFlag(RequiredGender.Male))
                     {
-                        GameScene.Scene.ChatDialog.ReceiveChat("You are not Female.", ChatType.System);
+                        GameScene.Scene.ChatDialog.ReceiveChat(GameLanguage.NotFemale, ChatType.System);
                         return false;
                     }
                     break;
                 case MirGender.Female:
                     if (!i.Info.RequiredGender.HasFlag(RequiredGender.Female))
                     {
-                        GameScene.Scene.ChatDialog.ReceiveChat("You are not Male.", ChatType.System);
+                        GameScene.Scene.ChatDialog.ReceiveChat(GameLanguage.NotMale, ChatType.System);
                         return false;
                     }
                     break;
@@ -1757,42 +1872,84 @@ namespace Client.MirControls
                 case RequiredType.Level:
                     if (MapObject.User.Level < i.Info.RequiredAmount)
                     {
-                        GameScene.Scene.ChatDialog.ReceiveChat("You are not a high enough level.", ChatType.System);
+                        GameScene.Scene.ChatDialog.ReceiveChat(GameLanguage.LowLevel, ChatType.System);
                         return false;
                     }
                     break;
-                case RequiredType.AC:
+                case RequiredType.MaxAC:
                     if (MapObject.User.MaxAC < i.Info.RequiredAmount)
                     {
                         GameScene.Scene.ChatDialog.ReceiveChat("You do not have enough AC.", ChatType.System);
                         return false;
                     }
                     break;
-                case RequiredType.MAC:
+                case RequiredType.MaxMAC:
                     if (MapObject.User.MaxMAC < i.Info.RequiredAmount)
                     {
                         GameScene.Scene.ChatDialog.ReceiveChat("You do not have enough MAC.", ChatType.System);
                         return false;
                     }
                     break;
-                case RequiredType.DC:
+                case RequiredType.MaxDC:
                     if (MapObject.User.MaxDC < i.Info.RequiredAmount)
                     {
-                        GameScene.Scene.ChatDialog.ReceiveChat("You do not have enough DC.", ChatType.System);
+                        GameScene.Scene.ChatDialog.ReceiveChat(GameLanguage.LowDC, ChatType.System);
                         return false;
                     }
                     break;
-                case RequiredType.MC:
+                case RequiredType.MaxMC:
                     if (MapObject.User.MaxMC < i.Info.RequiredAmount)
                     {
-                        GameScene.Scene.ChatDialog.ReceiveChat("You do not have enough MC.", ChatType.System);
+                        GameScene.Scene.ChatDialog.ReceiveChat(GameLanguage.LowMC, ChatType.System);
                         return false;
                     }
                     break;
-                case RequiredType.SC:
+                case RequiredType.MaxSC:
                     if (MapObject.User.MaxSC < i.Info.RequiredAmount)
                     {
-                        GameScene.Scene.ChatDialog.ReceiveChat("You do not have enough SC.", ChatType.System);
+                        GameScene.Scene.ChatDialog.ReceiveChat(GameLanguage.LowSC, ChatType.System);
+                        return false;
+                    }
+                    break;
+                case RequiredType.MaxLevel:
+                    if (MapObject.User.Level > i.Info.RequiredAmount)
+                    {
+                        GameScene.Scene.ChatDialog.ReceiveChat("You have exceeded the maximum level.", ChatType.System);
+                        return false;
+                    }
+                    break;
+                case RequiredType.MinAC:
+                    if (MapObject.User.MinAC < i.Info.RequiredAmount)
+                    {
+                        GameScene.Scene.ChatDialog.ReceiveChat("You do not have enough Base AC.", ChatType.System);
+                        return false;
+                    }
+                    break;
+                case RequiredType.MinMAC:
+                    if (MapObject.User.MinMAC < i.Info.RequiredAmount)
+                    {
+                        GameScene.Scene.ChatDialog.ReceiveChat("You do not have enough Base MAC.", ChatType.System);
+                        return false;
+                    }
+                    break;
+                case RequiredType.MinDC:
+                    if (MapObject.User.MinDC < i.Info.RequiredAmount)
+                    {
+                        GameScene.Scene.ChatDialog.ReceiveChat("You do not have enough Base DC.", ChatType.System);
+                        return false;
+                    }
+                    break;
+                case RequiredType.MinMC:
+                    if (MapObject.User.MinMC < i.Info.RequiredAmount)
+                    {
+                        GameScene.Scene.ChatDialog.ReceiveChat("You do not have enough Base MC.", ChatType.System);
+                        return false;
+                    }
+                    break;
+                case RequiredType.MinSC:
+                    if (MapObject.User.MinSC < i.Info.RequiredAmount)
+                    {
+                        GameScene.Scene.ChatDialog.ReceiveChat("You do not have enough Base SC.", ChatType.System);
                         return false;
                     }
                     break;
@@ -1802,7 +1959,7 @@ namespace Client.MirControls
             {
                 if (i.Weight - (Item != null ? Item.Weight : 0) + MapObject.User.CurrentHandWeight > MapObject.User.MaxHandWeight)
                 {
-                    GameScene.Scene.ChatDialog.ReceiveChat("It is too heavy to Hold.", ChatType.System);
+                    GameScene.Scene.ChatDialog.ReceiveChat(GameLanguage.TooHeavyToHold, ChatType.System);
                     return false;
                 }
             }
@@ -1858,6 +2015,21 @@ namespace Client.MirControls
                     Library.Draw(image, DisplayLocation.Add(offSet), Color.DimGray, UseOffSet, 0.8F);
                 }
             }
+            else if (ShadowItem != null)
+            {
+                CreateDisposeLabel();
+
+                if (Library != null)
+                {
+                    ushort image = ShadowItem.Info.Image;
+
+                    Size imgSize = Library.GetTrueSize(image);
+
+                    Point offSet = new Point((Size.Width - imgSize.Width) / 2, (Size.Height - imgSize.Height) / 2);
+
+                    Library.Draw(image, DisplayLocation.Add(offSet), Color.DimGray, UseOffSet, 0.8F);
+                }
+            }
             else
                 DisposeCountLabel();
         }
@@ -1868,7 +2040,12 @@ namespace Client.MirControls
             if (GridType == MirGridType.Inspect)
                 GameScene.Scene.CreateItemLabel(Item, true);
             else
-                GameScene.Scene.CreateItemLabel(Item);
+            {
+                if (Item != null)
+                    GameScene.Scene.CreateItemLabel(Item);
+                else if (ShadowItem != null)
+                    GameScene.Scene.CreateItemLabel(ShadowItem);
+            }
         }
         protected override void OnMouseLeave()
         {
@@ -1879,7 +2056,10 @@ namespace Client.MirControls
 
         private void CreateDisposeLabel()
         {
-            if (Item.Info.StackSize <= 1)
+            if (Item == null && ShadowItem == null)
+                return;
+
+            if (Item != null && ShadowItem == null && Item.Info.StackSize <= 1)
             {
                 DisposeCountLabel();
                 return;
@@ -1897,7 +2077,17 @@ namespace Client.MirControls
                 };
             }
 
-            CountLabel.Text = Item.Count.ToString("###0");
+            if (ShadowItem != null)
+            {
+                CountLabel.ForeColour = (Item == null || ShadowItem.Count > Item.Count) ? Color.Red : Color.LimeGreen;
+
+                CountLabel.Text = string.Format("{0}/{1}", Item == null ? 0 : Item.Count, ShadowItem.Count);
+            }
+            else
+            {
+                CountLabel.Text = Item.Count.ToString("###0");
+            }
+
             CountLabel.Location = new Point(Size.Width - CountLabel.Size.Width, Size.Height - CountLabel.Size.Height);
         }
         private void DisposeCountLabel()

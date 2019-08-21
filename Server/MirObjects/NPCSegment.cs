@@ -792,7 +792,10 @@ namespace Server.MirObjects
                     if (parts.Length < 2) return;
 
                     instanceId = parts.Length < 3 ? "1" : parts[2];
-                    acts.Add(new NPCActions(ActionType.MonClear, parts[1], instanceId));
+
+                    string mobName = parts.Length < 4 ? "" : parts[3];
+
+                    acts.Add(new NPCActions(ActionType.MonClear, parts[1], instanceId, mobName));
                     break;
 
                 case "GROUPRECALL":
@@ -1013,6 +1016,16 @@ namespace Server.MirObjects
                 case "CLOSEGATE":
                     if (parts.Length < 3) return;
                     acts.Add(new NPCActions(ActionType.CloseGate, parts[1], parts[2]));
+                    break;
+                case "OPENBROWSER":
+                    if (parts.Length < 2) return;                    
+                    acts.Add(new NPCActions(ActionType.OpenBrowser, parts[1]));
+                    break;
+                case "GETRANDOMTEXT":
+                    if (parts.Length < 3) return;
+                    match = Regex.Match(parts[2], @"[A-Z][0-9]", RegexOptions.IgnoreCase);
+                    if (match.Success)
+                        acts.Add(new NPCActions(ActionType.GetRandomText, parts[1], parts[2]));
                     break;
             }
 
@@ -1334,6 +1347,12 @@ namespace Server.MirObjects
                 case "PARCELAMOUNT":
                     newValue = player.GetMailAwaitingCollectionAmount().ToString();
                     break;
+                case "GUILDNAME":
+                    if (player.MyGuild == null) return "No Guild";
+                    else
+                        newValue = player.MyGuild.Name + " Guild";
+                    break;
+
                 default:
                     newValue = string.Empty;
                     break;
@@ -2174,15 +2193,16 @@ namespace Server.MirObjects
                         int left;
                         int right;
 
-                        if (!int.TryParse(param[0], out left) || !int.TryParse(param[2], out right))
-                        {
-                            failed = true;
-                            break;
-                        }
-
                         try
                         {
-                            failed = !Compare(param[1], left, right);
+                            if (!int.TryParse(param[0], out left) || !int.TryParse(param[2], out right))
+                            {
+                                failed = !Compare(param[1], param[0], param[2]);
+                            }
+                            else
+                            {
+                                failed = !Compare(param[1], left, right);
+                            }
                         }
                         catch (ArgumentException)
                         {
@@ -2746,7 +2766,7 @@ namespace Server.MirObjects
                     case ActionType.RemovePet:
                         for (int c = player.Pets.Count - 1; c >= 0; c--)
                         {
-                            if (string.Compare(player.Pets[c].Name, param[0], true) == 0) continue;
+                            if (string.Compare(player.Pets[c].Info.Name, param[0], true) != 0) continue;
 
                             player.Pets[c].Die();
                         }
@@ -3060,7 +3080,7 @@ namespace Server.MirObjects
 
                         map = SMain.Envir.GetMapByNameAndInstance(param[0], tempInt);
                         if (map == null) return;
-
+                        
                         foreach (var cell in map.Cells)
                         {
                             if (cell == null || cell.Objects == null) continue;
@@ -3071,6 +3091,10 @@ namespace Server.MirObjects
 
                                 if (ob.Race != ObjectType.Monster) continue;
                                 if (ob.Dead) continue;
+                                
+                                if (!string.IsNullOrEmpty(param[2]) && string.Compare(param[2], ((MonsterObject)ob).Info.Name, true) != 0)
+                                    continue;
+
                                 ob.Die();
                             }
                         }
@@ -3480,6 +3504,22 @@ namespace Server.MirObjects
                         if (CloseGate == null) return;
                         if (CloseGate.Gate == null) return;
                         CloseGate.Gate.CloseDoor();
+                        break;
+                    case ActionType.OpenBrowser:
+                        player.Enqueue(new S.OpenBrowser { Url = param[0]});
+                        break;
+                    case ActionType.GetRandomText:
+                        string randomTextPath = Settings.NPCPath + param[0];
+                        if (!File.Exists(randomTextPath))
+                        {
+                            SMain.Enqueue(string.Format("the randomTextFile:{0} does not exist.",randomTextPath));
+                        }
+                        else {
+                            var lines = File.ReadAllLines(randomTextPath);
+                            int index = SMain.Envir.Random.Next(0,lines.Length);
+                            string randomText = lines[index];
+                            AddVariable(player, param[1], randomText);
+                        }                        
                         break;
                 }
             }
